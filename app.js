@@ -206,7 +206,8 @@ async function captureScreenshots(url, timestamps) {
           timeout: 120000, // 2 minutes timeout
         });
 
-        await page.waitForTimeout(5000);
+        // Use setTimeout instead of waitForTimeout
+        await new Promise((resolve) => setTimeout(resolve, 5000));
 
         await page.screenshot({ path: screenshotPath, fullPage: true });
         console.log(`Screenshot saved: ${screenshotPath}`);
