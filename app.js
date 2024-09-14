@@ -4,6 +4,7 @@ const puppeteer = require("puppeteer");
 const ffmpeg = require("fluent-ffmpeg");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 
 const app = express();
 const port = 3000;
@@ -53,14 +54,14 @@ app.post("/generate-video", async (req, res) => {
       message: "Starting to capture screenshots...",
       total: timestamps.length,
     });
-    await captureScreenshots(url, timestamps);
+    const screenshotResults = await captureScreenshots(url, timestamps);
 
     console.log("3. Generating video from screenshots...");
     sendSSE({
       status: "generating",
       message: "Generating video from screenshots...",
     });
-    const videoPath = await generateVideo(timestamps.length);
+    const videoPath = await generateVideo(url, screenshotResults);
 
     console.log("Video generation complete");
     sendSSE({ status: "complete", videoPath });
@@ -119,26 +120,37 @@ async function captureScreenshots(url, timestamps) {
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
   const page = await browser.newPage();
-  const tempDir = path.join(__dirname, "temp");
-  if (!fs.existsSync(tempDir)) {
-    console.log(`Creating temporary directory: ${tempDir}`);
-    fs.mkdirSync(tempDir);
+
+  const urlHash = crypto.createHash("md5").update(url).digest("hex");
+  const siteDir = path.join(__dirname, "screenshots", urlHash);
+  if (!fs.existsSync(siteDir)) {
+    console.log(`Creating directory for site: ${siteDir}`);
+    fs.mkdirSync(siteDir, { recursive: true });
   }
 
-  for (let i = 0; i < timestamps.length; i++) {
-    try {
-      const timestamp = timestamps[i];
-      const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
-      console.log(`Capturing screenshot for ${waybackUrl}`);
-      await page.goto(waybackUrl, {
-        waitUntil: "networkidle0",
-        timeout: 60000,
-      });
-      const screenshot = await page.screenshot({ fullPage: true });
+  const screenshotResults = [];
 
-      const filePath = path.join(tempDir, `screenshot_${i}.png`);
-      fs.writeFileSync(filePath, screenshot);
-      console.log(`Screenshot saved: ${filePath}`);
+  for (let i = 0; i < timestamps.length; i++) {
+    const timestamp = timestamps[i];
+    const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
+    const screenshotPath = path.join(siteDir, `screenshot_${timestamp}.png`);
+
+    try {
+      if (fs.existsSync(screenshotPath)) {
+        console.log(
+          `Screenshot already exists for ${timestamp}, skipping capture`
+        );
+      } else {
+        console.log(`Capturing screenshot for ${waybackUrl}`);
+        await page.goto(waybackUrl, {
+          waitUntil: "networkidle0",
+          timeout: 60000,
+        });
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        console.log(`Screenshot saved: ${screenshotPath}`);
+      }
+
+      screenshotResults.push({ timestamp, path: screenshotPath });
 
       const date = new Date(
         timestamp.slice(0, 4),
@@ -167,12 +179,14 @@ async function captureScreenshots(url, timestamps) {
 
   console.log("Closing browser");
   await browser.close();
+
+  return screenshotResults;
 }
 
-async function generateVideo(totalFrames) {
+async function generateVideo(url, screenshotResults) {
   console.log("Generating video from screenshots");
-  const tempDir = path.join(__dirname, "temp");
-  const outputPath = path.join(__dirname, "public", "output.mp4");
+  const urlHash = crypto.createHash("md5").update(url).digest("hex");
+  const outputPath = path.join(__dirname, "public", `${urlHash}_output.mp4`);
 
   return new Promise((resolve, reject) => {
     const ffmpegCommand = ffmpeg();
@@ -185,7 +199,7 @@ async function generateVideo(totalFrames) {
     }
 
     ffmpegCommand
-      .input(path.join(tempDir, "screenshot_%d.png"))
+      .input(path.join(__dirname, "screenshots", urlHash, "screenshot_%d.png"))
       .inputFPS(1)
       .output(outputPath)
       .videoCodec("libx264")
@@ -195,17 +209,16 @@ async function generateVideo(totalFrames) {
       })
       .on("progress", (progress) => {
         console.log(`FFmpeg progress: ${progress.percent}% done`);
+        sendSSE({
+          status: "generating",
+          message: `Generating video: ${Math.round(
+            progress.percent
+          )}% complete`,
+        });
       })
       .on("end", () => {
         console.log("FFmpeg process completed");
-        // Clean up temp files
-        fs.readdirSync(tempDir).forEach((file) => {
-          console.log(`Removing temp file: ${file}`);
-          fs.unlinkSync(path.join(tempDir, file));
-        });
-        fs.rmdirSync(tempDir);
-        console.log("Temporary directory removed");
-        resolve("/output.mp4");
+        resolve(`/${urlHash}_output.mp4`);
       })
       .on("error", (err) => {
         console.error("FFmpeg error:", err);
@@ -214,3 +227,5 @@ async function generateVideo(totalFrames) {
       .run();
   });
 }
+
+module.exports = app;
