@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Website Evolution Video Generator</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      #progressBar {
+        width: 100%;
+        background-color: #ddd;
+        margin-top: 20px;
+      }
+      #progressBar div {
+        height: 30px;
+        background-color: #4caf50;
+        text-align: center;
+        line-height: 30px;
+        color: white;
+        transition: width 0.5s;
+      }
+      #status {
+        margin-top: 20px;
+      }
+      #resultVideo {
+        max-width: 100%;
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Website Evolution Video Generator</h1>
+    <form id="urlForm">
+      <input
+        type="text"
+        id="urlInput"
+        placeholder="Enter website URL"
+        value="digitalocean.com"
+        required
+      />
+      <button type="submit">Generate Video</button>
+    </form>
+    <div>
+      <input type="checkbox" id="quickTestCheckbox" />
+      <label for="quickTestCheckbox">Quick Test (first 10 images only)</label>
+    </div>
+    <div id="status"></div>
+    <div id="progressBar" style="display: none">
+      <div></div>
+    </div>
+    <video id="resultVideo" controls style="display: none"></video>
+
+    <script>
+      document
+        .getElementById("urlForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const url = document.getElementById("urlInput").value;
+          const isQuickTest =
+            document.getElementById("quickTestCheckbox").checked;
+          const statusDiv = document.getElementById("status");
+          const progressBar = document.getElementById("progressBar");
+          const progressBarInner = progressBar.querySelector("div");
+          const videoElement = document.getElementById("resultVideo");
+
+          statusDiv.textContent = "Initiating video generation...";
+          progressBar.style.display = "block";
+          progressBarInner.style.width = "0%";
+          videoElement.style.display = "none";
+
+          // Start the SSE connection
+          const eventSource = new EventSource("/progress");
+
+          eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            switch (data.status) {
+              case "fetching":
+              case "generating":
+                statusDiv.textContent = data.message;
+                break;
+              case "processing":
+                if (data.total) {
+                  const progress = (data.current / data.total) * 100;
+                  progressBarInner.style.width = `${progress}%`;
+                  progressBarInner.textContent = `${data.current}/${data.total}`;
+                  statusDiv.textContent = `Processing: ${data.date}`;
+                } else {
+                  statusDiv.textContent = data.message;
+                }
+                break;
+              case "complete":
+                statusDiv.textContent = "Video generated successfully!";
+                videoElement.src = data.videoPath;
+                videoElement.style.display = "block";
+                eventSource.close();
+                break;
+              case "error":
+                statusDiv.textContent = "Error: " + data.message;
+                progressBar.style.display = "none";
+                eventSource.close();
+                break;
+              case "warning":
+                console.warn(data.message);
+                break;
+            }
+          };
+
+          try {
+            const response = await fetch("/generate-video", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url, isQuickTest }),
+            });
+
+            if (!response.ok) {
+              throw new Error("Failed to start video generation");
+            }
+          } catch (error) {
+            statusDiv.textContent = "Error: " + error.message;
+            progressBar.style.display = "none";
+            eventSource.close();
+          }
+        });
+    </script>
+  </body>
+</html>
