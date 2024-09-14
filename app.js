@@ -14,6 +14,7 @@ app.use(express.static("public"));
 let clients = [];
 
 function sendSSE(data) {
+  console.log("Sending SSE data:", data);
   clients.forEach((client) => {
     client.res.write(`data: ${JSON.stringify(data)}\n\n`);
   });

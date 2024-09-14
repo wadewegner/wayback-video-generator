@@ -5,7 +5,58 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Website Evolution Video Generator</title>
     <style>
-      /* ... (keep existing styles) ... */
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+        line-height: 1.6;
+      }
+      h1 {
+        color: #333;
+      }
+      #urlForm {
+        margin-bottom: 20px;
+      }
+      #urlInput {
+        width: 70%;
+        padding: 10px;
+        font-size: 16px;
+      }
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+      #status {
+        margin-top: 20px;
+        font-weight: bold;
+      }
+      #progressBar {
+        width: 100%;
+        background-color: #f3f3f3;
+        padding: 3px;
+        border-radius: 5px;
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+        margin-top: 20px;
+      }
+      #progressBar div {
+        width: 0;
+        height: 20px;
+        background-color: #4caf50;
+        border-radius: 5px;
+        transition: width 0.5s ease-in-out;
+      }
+      #resultVideo {
+        max-width: 100%;
+        margin-top: 20px;
+      }
     </style>
   </head>
   <body>
@@ -37,6 +88,7 @@
         eventSource = new EventSource("/progress");
 
         eventSource.onmessage = (event) => {
+          console.log("Received SSE message:", event.data);
           const data = JSON.parse(event.data);
           handleSSEMessage(data);
         };
@@ -49,6 +101,7 @@
       }
 
       function handleSSEMessage(data) {
+        console.log("Handling SSE message:", data);
         const statusDiv = document.getElementById("status");
         const progressBar = document.getElementById("progressBar");
         const progressBarInner = progressBar.querySelector("div");
@@ -60,6 +113,7 @@
             statusDiv.textContent = data.message;
             break;
           case "processing":
+            progressBar.style.display = "block";
             if (data.total) {
               const progress = (data.current / data.total) * 100;
               progressBarInner.style.width = `${progress}%`;
@@ -73,12 +127,16 @@
             statusDiv.textContent = "Video generated successfully!";
             videoElement.src = data.videoPath;
             videoElement.style.display = "block";
-            eventSource.close();
+            if (eventSource) {
+              eventSource.close();
+            }
             break;
           case "error":
             statusDiv.textContent = "Error: " + data.message;
             progressBar.style.display = "none";
-            eventSource.close();
+            if (eventSource) {
+              eventSource.close();
+            }
             break;
           case "warning":
             console.warn(data.message);
@@ -99,7 +157,7 @@
           const videoElement = document.getElementById("resultVideo");
 
           statusDiv.textContent = "Initiating video generation...";
-          progressBar.style.display = "block";
+          progressBar.style.display = "none";
           progressBarInner.style.width = "0%";
           videoElement.style.display = "none";
 
