@@ -4,7 +4,6 @@ const puppeteer = require("puppeteer");
 const ffmpeg = require("fluent-ffmpeg");
 const path = require("path");
 const fs = require("fs");
-const url = require("url");
 
 const app = express();
 const port = 3000;
@@ -15,15 +14,17 @@ app.use(express.static("public"));
 let clients = [];
 
 function sendSSE(data) {
-  clients.forEach((client) =>
-    client.res.write(`data: ${JSON.stringify(data)}\n\n`)
-  );
+  clients.forEach((client) => {
+    client.res.write(`data: ${JSON.stringify(data)}\n\n`);
+  });
 }
 
 app.post("/generate-video", async (req, res) => {
   console.log("Received request to generate video");
   const { url, isQuickTest } = req.body;
   console.log(`URL received: ${url}, Quick test: ${isQuickTest}`);
+
+  res.json({ message: "Video generation started" });
 
   try {
     console.log("1. Fetching timestamps from Wayback Machine...");
@@ -62,11 +63,9 @@ app.post("/generate-video", async (req, res) => {
 
     console.log("Video generation complete");
     sendSSE({ status: "complete", videoPath });
-    res.json({ success: true });
   } catch (error) {
     console.error("Error in /generate-video:", error);
     sendSSE({ status: "error", message: error.message });
-    res.status(500).json({ error: error.message });
   }
 });
 
@@ -108,25 +107,16 @@ async function fetchWaybackTimestamps(url) {
     return response.data.slice(1).map((item) => item[0]);
   } catch (error) {
     console.error("Error in fetchWaybackTimestamps:", error);
-    if (error.response) {
-      console.error(
-        `Wayback Machine API error: ${error.response.status} ${error.response.statusText}`
-      );
-      throw new Error(
-        `Wayback Machine API error: ${error.response.status} ${error.response.statusText}`
-      );
-    } else if (error.request) {
-      console.error("No response received from Wayback Machine API");
-      throw new Error("No response received from Wayback Machine API");
-    } else {
-      throw error;
-    }
+    throw error;
   }
 }
 
 async function captureScreenshots(url, timestamps) {
   console.log("Launching browser for screenshot capture");
-  const browser = await puppeteer.launch();
+  const browser = await puppeteer.launch({
+    executablePath: "/usr/bin/google-chrome",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
   const page = await browser.newPage();
   const tempDir = path.join(__dirname, "temp");
   if (!fs.existsSync(tempDir)) {
@@ -184,10 +174,21 @@ async function generateVideo(totalFrames) {
   const outputPath = path.join(__dirname, "public", "output.mp4");
 
   return new Promise((resolve, reject) => {
-    ffmpeg()
+    const ffmpegCommand = ffmpeg();
+
+    // Check if running on DigitalOcean (you might need to adjust this check)
+    const isDigitalOcean = process.env.DIGITAL_OCEAN === "true";
+
+    if (isDigitalOcean) {
+      ffmpegCommand.setFfmpegPath("/usr/bin/ffmpeg");
+    }
+
+    ffmpegCommand
       .input(path.join(tempDir, "screenshot_%d.png"))
       .inputFPS(1)
       .output(outputPath)
+      .videoCodec("libx264")
+      .outputOptions("-pix_fmt yuv420p") // Ensure compatibility
       .on("start", (commandLine) => {
         console.log("FFmpeg process started:", commandLine);
       })
