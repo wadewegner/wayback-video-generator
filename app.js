@@ -15,6 +15,7 @@ app.use(express.json());
 app.use(express.static("public"));
 
 let clients = [];
+const eventId = new Date().toISOString();
 
 const cacheFilePath = path.join(__dirname, "imageCache.json");
 
@@ -46,6 +47,7 @@ async function updateImageCache(urlHash, timestamp) {
 function sendSSE(data) {
   console.log("Sending SSE data:", data);
   clients.forEach((client) => {
+    client.res.write(`id: ${eventId}\n`);
     client.res.write(`data: ${JSON.stringify(data)}\n\n`);
   });
 }
@@ -118,7 +120,9 @@ app.get("/progress", (req, res) => {
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
-  res.write("\n");
+  res.write(`id: ${eventId}\n`);
+  res.write("event: connected\n");
+  res.write(`data: ${JSON.stringify({ message: "Connected to SSE" })}\n\n`);
 
   const clientId = Date.now();
   const newClient = { id: clientId, res };
@@ -127,6 +131,16 @@ app.get("/progress", (req, res) => {
   req.on("close", () => {
     console.log(`${clientId} Connection closed`);
     clients = clients.filter((client) => client.id !== clientId);
+  });
+
+  // Send a ping every 30 seconds to keep the connection alive
+  const intervalId = setInterval(() => {
+    res.write(`event: ping\n`);
+    res.write(`data: ${new Date().toISOString()}\n\n`);
+  }, 30000);
+
+  req.on("close", () => {
+    clearInterval(intervalId);
   });
 });
 
