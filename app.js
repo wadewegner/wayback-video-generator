@@ -3,7 +3,8 @@ const axios = require("axios");
 const puppeteer = require("puppeteer");
 const ffmpeg = require("fluent-ffmpeg");
 const path = require("path");
-const fs = require("fs");
+const fs = require("fs").promises;
+const fsSync = require("fs");
 const crypto = require("crypto");
 const UserAgent = require("user-agents");
 
@@ -14,6 +15,33 @@ app.use(express.json());
 app.use(express.static("public"));
 
 let clients = [];
+
+const cacheFilePath = path.join(__dirname, "imageCache.json");
+
+async function loadImageCache() {
+  try {
+    const data = await fs.readFile(cacheFilePath, "utf8");
+    return JSON.parse(data);
+  } catch (error) {
+    console.log("No existing cache found. Creating a new one.");
+    return {};
+  }
+}
+
+async function saveImageCache(cache) {
+  await fs.writeFile(cacheFilePath, JSON.stringify(cache, null, 2));
+}
+
+async function updateImageCache(urlHash, timestamp) {
+  const cache = await loadImageCache();
+  if (!cache[urlHash]) {
+    cache[urlHash] = [];
+  }
+  if (!cache[urlHash].includes(timestamp)) {
+    cache[urlHash].push(timestamp);
+    await saveImageCache(cache);
+  }
+}
 
 function sendSSE(data) {
   console.log("Sending SSE data:", data);
@@ -41,6 +69,17 @@ app.post("/generate-video", async (req, res) => {
     if (timestamps.length === 0) {
       throw new Error("No archived versions found for this URL");
     }
+
+    const urlHash = crypto.createHash("md5").update(url).digest("hex");
+    const imageCache = await loadImageCache();
+    const cachedTimestamps = new Set(imageCache[urlHash] || []);
+
+    timestamps = timestamps.filter(
+      (timestamp) => !cachedTimestamps.has(timestamp)
+    );
+    console.log(
+      `${timestamps.length} new timestamps to process after filtering cached ones`
+    );
 
     if (isQuickTest) {
       timestamps = timestamps.slice(0, 10);
@@ -124,13 +163,10 @@ async function captureScreenshots(url, timestamps) {
 
   const urlHash = crypto.createHash("md5").update(url).digest("hex");
   const siteDir = path.join(__dirname, "screenshots", urlHash);
-  if (!fs.existsSync(siteDir)) {
+  if (!fsSync.existsSync(siteDir)) {
     console.log(`Creating directory for site: ${siteDir}`);
-    fs.mkdirSync(siteDir, { recursive: true });
+    fsSync.mkdirSync(siteDir, { recursive: true });
   }
-
-  // Pre-check all files at once
-  const existingFiles = new Set(fs.readdirSync(siteDir));
 
   const screenshotResults = [];
   let requestCount = 0;
@@ -156,50 +192,42 @@ async function captureScreenshots(url, timestamps) {
       lastRequestTime = Date.now();
     }
 
-    if (existingFiles.has(screenshotFilename)) {
-      console.log(
-        `Screenshot already exists for ${timestamp}, skipping capture`
-      );
-      screenshotResults.push({ timestamp, path: screenshotPath });
-    } else {
-      let retries = 3;
-      while (retries > 0) {
-        try {
-          console.log(`Capturing screenshot for ${waybackUrl}`);
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        console.log(`Capturing screenshot for ${waybackUrl}`);
 
-          // Set a random user agent
-          const userAgent = new UserAgent();
-          await page.setUserAgent(userAgent.toString());
+        // Set a random user agent
+        const userAgent = new UserAgent();
+        await page.setUserAgent(userAgent.toString());
 
-          // Increase timeout and add waitUntil options
-          await page.goto(waybackUrl, {
-            waitUntil: ["load", "domcontentloaded", "networkidle0"],
-            timeout: 120000, // Increase timeout to 2 minutes
+        await page.goto(waybackUrl, {
+          waitUntil: ["load", "domcontentloaded", "networkidle0"],
+          timeout: 120000, // 2 minutes timeout
+        });
+
+        await page.waitForTimeout(5000);
+
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        console.log(`Screenshot saved: ${screenshotPath}`);
+        screenshotResults.push({ timestamp, path: screenshotPath });
+        await updateImageCache(urlHash, timestamp);
+        requestCount++;
+        break;
+      } catch (error) {
+        console.error(`Error capturing screenshot for ${timestamp}:`, error);
+        retries--;
+        if (retries > 0) {
+          const delay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
+          console.log(`Retrying in ${delay / 1000} seconds...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        } else {
+          sendSSE({
+            status: "warning",
+            message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
+            current: i + 1,
+            total: timestamps.length,
           });
-
-          // Wait for an additional 5 seconds after load
-          await page.waitForTimeout(5000);
-
-          await page.screenshot({ path: screenshotPath, fullPage: true });
-          console.log(`Screenshot saved: ${screenshotPath}`);
-          screenshotResults.push({ timestamp, path: screenshotPath });
-          requestCount++;
-          break;
-        } catch (error) {
-          console.error(`Error capturing screenshot for ${timestamp}:`, error);
-          retries--;
-          if (retries > 0) {
-            const delay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
-            console.log(`Retrying in ${delay / 1000} seconds...`);
-            await new Promise((resolve) => setTimeout(resolve, delay));
-          } else {
-            sendSSE({
-              status: "warning",
-              message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
-              current: i + 1,
-              total: timestamps.length,
-            });
-          }
         }
       }
     }
@@ -249,7 +277,7 @@ async function generateVideo(url, screenshotResults) {
     const fileContent = screenshotResults
       .map((result) => `file '${result.path}'`)
       .join("\n");
-    fs.writeFileSync(listFilePath, fileContent);
+    fsSync.writeFileSync(listFilePath, fileContent);
 
     ffmpegCommand
       .input(listFilePath)
@@ -273,14 +301,14 @@ async function generateVideo(url, screenshotResults) {
       .on("end", () => {
         console.log("FFmpeg process completed");
         // Clean up the temporary file
-        fs.unlinkSync(listFilePath);
+        fsSync.unlinkSync(listFilePath);
         resolve(`/${urlHash}_output.mp4`);
       })
       .on("error", (err) => {
         console.error("FFmpeg error:", err);
         // Clean up the temporary file in case of error
-        if (fs.existsSync(listFilePath)) {
-          fs.unlinkSync(listFilePath);
+        if (fsSync.existsSync(listFilePath)) {
+          fsSync.unlinkSync(listFilePath);
         }
         reject(err);
       })
