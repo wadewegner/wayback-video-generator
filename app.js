@@ -5,6 +5,7 @@ const ffmpeg = require("fluent-ffmpeg");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const UserAgent = require("user-agents");
 
 const app = express();
 const port = 3000;
@@ -135,21 +136,48 @@ async function captureScreenshots(url, timestamps) {
     const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
     const screenshotPath = path.join(siteDir, `screenshot_${timestamp}.png`);
 
-    try {
-      if (fs.existsSync(screenshotPath)) {
-        console.log(
-          `Screenshot already exists for ${timestamp}, skipping capture`
-        );
-      } else {
-        console.log(`Capturing screenshot for ${waybackUrl}`);
-        await page.goto(waybackUrl, {
-          waitUntil: "networkidle0",
-          timeout: 60000,
-        });
-        await page.screenshot({ path: screenshotPath, fullPage: true });
-        console.log(`Screenshot saved: ${screenshotPath}`);
-      }
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        if (fs.existsSync(screenshotPath)) {
+          console.log(
+            `Screenshot already exists for ${timestamp}, skipping capture`
+          );
+          break;
+        } else {
+          console.log(`Capturing screenshot for ${waybackUrl}`);
 
+          // Set a random user agent
+          const userAgent = new UserAgent();
+          await page.setUserAgent(userAgent.toString());
+
+          await page.goto(waybackUrl, {
+            waitUntil: "networkidle0",
+            timeout: 60000,
+          });
+          await page.screenshot({ path: screenshotPath, fullPage: true });
+          console.log(`Screenshot saved: ${screenshotPath}`);
+          break;
+        }
+      } catch (error) {
+        console.error(`Error capturing screenshot for ${timestamp}:`, error);
+        retries--;
+        if (retries > 0) {
+          const delay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
+          console.log(`Retrying in ${delay / 1000} seconds...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        } else {
+          sendSSE({
+            status: "warning",
+            message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
+            current: i + 1,
+            total: timestamps.length,
+          });
+        }
+      }
+    }
+
+    if (retries > 0) {
       screenshotResults.push({ timestamp, path: screenshotPath });
 
       const date = new Date(
@@ -166,15 +194,10 @@ async function captureScreenshots(url, timestamps) {
           year: "numeric",
         }),
       });
-    } catch (error) {
-      console.error(`Error capturing screenshot for ${timestamp}:`, error);
-      sendSSE({
-        status: "warning",
-        message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
-        current: i + 1,
-        total: timestamps.length,
-      });
     }
+
+    // Add a delay between requests
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
   console.log("Closing browser");
