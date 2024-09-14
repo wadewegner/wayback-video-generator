@@ -76,6 +76,9 @@ app.post("/generate-video", async (req, res) => {
     const imageCache = await loadImageCache();
     const cachedTimestamps = new Set(imageCache[urlHash] || []);
 
+    const alreadyCapturedCount = cachedTimestamps.size;
+    const totalCount = timestamps.length;
+
     timestamps = timestamps.filter(
       (timestamp) => !cachedTimestamps.has(timestamp)
     );
@@ -94,9 +97,15 @@ app.post("/generate-video", async (req, res) => {
     sendSSE({
       status: "processing",
       message: "Starting to capture screenshots...",
-      total: timestamps.length,
+      current: alreadyCapturedCount,
+      total: totalCount,
     });
-    const screenshotResults = await captureScreenshots(url, timestamps);
+    const screenshotResults = await captureScreenshots(
+      url,
+      timestamps,
+      alreadyCapturedCount,
+      totalCount
+    );
 
     console.log("3. Generating video from screenshots...");
     sendSSE({
@@ -167,7 +176,7 @@ async function fetchWaybackTimestamps(url) {
   }
 }
 
-async function captureScreenshots(url, timestamps) {
+async function captureScreenshots(url, timestamps, startCount, totalCount) {
   console.log("Launching browser for screenshot capture");
   const browser = await puppeteer.launch({
     executablePath: "/usr/bin/google-chrome",
@@ -215,10 +224,21 @@ async function captureScreenshots(url, timestamps) {
         const userAgent = new UserAgent();
         await page.setUserAgent(userAgent.toString());
 
-        await page.goto(waybackUrl, {
-          waitUntil: ["load", "domcontentloaded", "networkidle0"],
-          timeout: 120000, // 2 minutes timeout
-        });
+        // Set a shorter timeout and catch the error
+        try {
+          await page.goto(waybackUrl, {
+            waitUntil: ["load", "domcontentloaded", "networkidle0"],
+            timeout: 30000, // 30 seconds timeout
+          });
+        } catch (error) {
+          if (error.name === "TimeoutError") {
+            console.log(
+              `Timeout occurred, but continuing with screenshot capture for ${timestamp}`
+            );
+          } else {
+            throw error;
+          }
+        }
 
         // Use setTimeout instead of waitForTimeout
         await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -240,8 +260,8 @@ async function captureScreenshots(url, timestamps) {
           sendSSE({
             status: "warning",
             message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
-            current: i + 1,
-            total: timestamps.length,
+            current: startCount + i + 1,
+            total: totalCount,
           });
         }
       }
@@ -254,8 +274,8 @@ async function captureScreenshots(url, timestamps) {
     );
     sendSSE({
       status: "processing",
-      current: i + 1,
-      total: timestamps.length,
+      current: startCount + i + 1,
+      total: totalCount,
       date: date.toLocaleString("default", { month: "long", year: "numeric" }),
     });
 
