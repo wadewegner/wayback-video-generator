@@ -171,10 +171,15 @@ async function captureScreenshots(url, timestamps) {
           const userAgent = new UserAgent();
           await page.setUserAgent(userAgent.toString());
 
+          // Increase timeout and add waitUntil options
           await page.goto(waybackUrl, {
-            waitUntil: "networkidle0",
-            timeout: 60000,
+            waitUntil: ["load", "domcontentloaded", "networkidle0"],
+            timeout: 120000, // Increase timeout to 2 minutes
           });
+
+          // Wait for an additional 5 seconds after load
+          await page.waitForTimeout(5000);
+
           await page.screenshot({ path: screenshotPath, fullPage: true });
           console.log(`Screenshot saved: ${screenshotPath}`);
           screenshotResults.push({ timestamp, path: screenshotPath });
