@@ -188,6 +188,9 @@ async function generateVideo(url, screenshotResults) {
   const urlHash = crypto.createHash("md5").update(url).digest("hex");
   const outputPath = path.join(__dirname, "public", `${urlHash}_output.mp4`);
 
+  // Sort screenshots by timestamp
+  screenshotResults.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
   return new Promise((resolve, reject) => {
     const ffmpegCommand = ffmpeg();
 
@@ -198,8 +201,16 @@ async function generateVideo(url, screenshotResults) {
       ffmpegCommand.setFfmpegPath("/usr/bin/ffmpeg");
     }
 
+    // Create a temporary file with the list of images
+    const listFilePath = path.join(__dirname, `${urlHash}_images.txt`);
+    const fileContent = screenshotResults
+      .map((result) => `file '${result.path}'`)
+      .join("\n");
+    fs.writeFileSync(listFilePath, fileContent);
+
     ffmpegCommand
-      .input(path.join(__dirname, "screenshots", urlHash, "screenshot_%d.png"))
+      .input(listFilePath)
+      .inputOptions(["-f concat", "-safe 0"])
       .inputFPS(1)
       .output(outputPath)
       .videoCodec("libx264")
@@ -218,10 +229,16 @@ async function generateVideo(url, screenshotResults) {
       })
       .on("end", () => {
         console.log("FFmpeg process completed");
+        // Clean up the temporary file
+        fs.unlinkSync(listFilePath);
         resolve(`/${urlHash}_output.mp4`);
       })
       .on("error", (err) => {
         console.error("FFmpeg error:", err);
+        // Clean up the temporary file in case of error
+        if (fs.existsSync(listFilePath)) {
+          fs.unlinkSync(listFilePath);
+        }
         reject(err);
       })
       .run();
