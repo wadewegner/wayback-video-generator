@@ -100,7 +100,7 @@ app.post("/generate-video", async (req, res) => {
       current: alreadyCapturedCount,
       total: totalCount,
     });
-    const screenshotResults = await captureScreenshots(
+    const screenshotResults = await captureScreenshotsWithQueue(
       url,
       timestamps,
       alreadyCapturedCount,
@@ -176,13 +176,18 @@ async function fetchWaybackTimestamps(url) {
   }
 }
 
-async function captureScreenshots(url, timestamps, startCount, totalCount) {
+async function captureScreenshotsWithQueue(
+  url,
+  timestamps,
+  startCount,
+  totalCount
+) {
   console.log("Launching browser for screenshot capture");
   const browser = await puppeteer.launch({
     executablePath: "/usr/bin/google-chrome",
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    defaultViewport: { width: 1920, height: 1080 },
   });
-  const page = await browser.newPage();
 
   const urlHash = crypto.createHash("md5").update(url).digest("hex");
   const siteDir = path.join(__dirname, "screenshots", urlHash);
@@ -192,96 +197,65 @@ async function captureScreenshots(url, timestamps, startCount, totalCount) {
   }
 
   const screenshotResults = [];
-  let requestCount = 0;
-  let lastRequestTime = Date.now();
+  const concurrency = 2; // Number of concurrent screenshot captures
+  const queue = timestamps.map((timestamp, index) => ({ timestamp, index }));
 
-  for (let i = 0; i < timestamps.length; i++) {
-    const timestamp = timestamps[i];
-    const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
-    const screenshotFilename = `screenshot_${timestamp}.png`;
-    const screenshotPath = path.join(siteDir, screenshotFilename);
+  async function processQueue() {
+    while (queue.length > 0) {
+      const { timestamp, index } = queue.shift();
+      const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
+      const screenshotFilename = `screenshot_${timestamp}.png`;
+      const screenshotPath = path.join(siteDir, screenshotFilename);
 
-    // Check rate limit
-    if (requestCount >= 15) {
-      const elapsedTime = Date.now() - lastRequestTime;
-      if (elapsedTime < 60000) {
-        const delayTime = 60000 - elapsedTime;
-        console.log(
-          `Rate limit reached. Waiting for ${delayTime}ms before next request.`
-        );
-        await new Promise((resolve) => setTimeout(resolve, delayTime));
-      }
-      requestCount = 0;
-      lastRequestTime = Date.now();
-    }
-
-    let retries = 3;
-    while (retries > 0) {
       try {
         console.log(`Capturing screenshot for ${waybackUrl}`);
-
-        // Set a random user agent
+        const page = await browser.newPage();
         const userAgent = new UserAgent();
         await page.setUserAgent(userAgent.toString());
 
-        // Set a shorter timeout and catch the error
-        try {
-          await page.goto(waybackUrl, {
-            waitUntil: ["load", "domcontentloaded", "networkidle0"],
-            timeout: 30000, // 30 seconds timeout
-          });
-        } catch (error) {
-          if (error.name === "TimeoutError") {
-            console.log(
-              `Timeout occurred, but continuing with screenshot capture for ${timestamp}`
-            );
-          } else {
-            throw error;
-          }
-        }
-
-        // Use setTimeout instead of waitForTimeout
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await page.goto(waybackUrl, {
+          waitUntil: ["load", "domcontentloaded", "networkidle0"],
+          timeout: 60000, // 60 seconds timeout
+        });
 
         await page.screenshot({ path: screenshotPath, fullPage: true });
+        await page.close();
+
         console.log(`Screenshot saved: ${screenshotPath}`);
         screenshotResults.push({ timestamp, path: screenshotPath });
         await updateImageCache(urlHash, timestamp);
-        requestCount++;
-        break;
+
+        const date = new Date(
+          timestamp.slice(0, 4),
+          timestamp.slice(4, 6) - 1,
+          timestamp.slice(6, 8)
+        );
+        sendSSE({
+          status: "processing",
+          current: startCount + index + 1,
+          total: totalCount,
+          date: date.toLocaleString("default", {
+            month: "long",
+            year: "numeric",
+          }),
+        });
       } catch (error) {
         console.error(`Error capturing screenshot for ${timestamp}:`, error);
-        retries--;
-        if (retries > 0) {
-          const delay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
-          console.log(`Retrying in ${delay / 1000} seconds...`);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        } else {
-          sendSSE({
-            status: "warning",
-            message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
-            current: startCount + i + 1,
-            total: totalCount,
-          });
-        }
+        sendSSE({
+          status: "warning",
+          message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
+          current: startCount + index + 1,
+          total: totalCount,
+        });
       }
+
+      // Add a small delay between requests to respect rate limit
+      await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
     }
-
-    const date = new Date(
-      timestamp.slice(0, 4),
-      timestamp.slice(4, 6) - 1,
-      timestamp.slice(6, 8)
-    );
-    sendSSE({
-      status: "processing",
-      current: startCount + i + 1,
-      total: totalCount,
-      date: date.toLocaleString("default", { month: "long", year: "numeric" }),
-    });
-
-    // Add a small delay between requests to respect rate limit
-    await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
   }
+
+  const workers = Array(concurrency).fill().map(processQueue);
+  await Promise.all(workers);
 
   console.log("Closing browser");
   await browser.close();
