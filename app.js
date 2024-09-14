@@ -130,11 +130,27 @@ async function captureScreenshots(url, timestamps) {
   }
 
   const screenshotResults = [];
+  let requestCount = 0;
+  let lastRequestTime = Date.now();
 
   for (let i = 0; i < timestamps.length; i++) {
     const timestamp = timestamps[i];
     const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
     const screenshotPath = path.join(siteDir, `screenshot_${timestamp}.png`);
+
+    // Check rate limit
+    if (requestCount >= 15) {
+      const elapsedTime = Date.now() - lastRequestTime;
+      if (elapsedTime < 60000) {
+        const delayTime = 60000 - elapsedTime;
+        console.log(
+          `Rate limit reached. Waiting for ${delayTime}ms before next request.`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayTime));
+      }
+      requestCount = 0;
+      lastRequestTime = Date.now();
+    }
 
     let retries = 3;
     while (retries > 0) {
@@ -157,6 +173,7 @@ async function captureScreenshots(url, timestamps) {
           });
           await page.screenshot({ path: screenshotPath, fullPage: true });
           console.log(`Screenshot saved: ${screenshotPath}`);
+          requestCount++;
           break;
         }
       } catch (error) {
@@ -196,8 +213,8 @@ async function captureScreenshots(url, timestamps) {
       });
     }
 
-    // Add a delay between requests
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // Add a delay between requests to respect rate limit
+    await new Promise((resolve) => setTimeout(resolve, 4000)); // 4 seconds delay
   }
 
   console.log("Closing browser");
