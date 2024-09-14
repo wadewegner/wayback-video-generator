@@ -129,6 +129,9 @@ async function captureScreenshots(url, timestamps) {
     fs.mkdirSync(siteDir, { recursive: true });
   }
 
+  // Pre-check all files at once
+  const existingFiles = new Set(fs.readdirSync(siteDir));
+
   const screenshotResults = [];
   let requestCount = 0;
   let lastRequestTime = Date.now();
@@ -136,7 +139,8 @@ async function captureScreenshots(url, timestamps) {
   for (let i = 0; i < timestamps.length; i++) {
     const timestamp = timestamps[i];
     const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
-    const screenshotPath = path.join(siteDir, `screenshot_${timestamp}.png`);
+    const screenshotFilename = `screenshot_${timestamp}.png`;
+    const screenshotPath = path.join(siteDir, screenshotFilename);
 
     // Check rate limit
     if (requestCount >= 15) {
@@ -152,15 +156,15 @@ async function captureScreenshots(url, timestamps) {
       lastRequestTime = Date.now();
     }
 
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        if (fs.existsSync(screenshotPath)) {
-          console.log(
-            `Screenshot already exists for ${timestamp}, skipping capture`
-          );
-          break;
-        } else {
+    if (existingFiles.has(screenshotFilename)) {
+      console.log(
+        `Screenshot already exists for ${timestamp}, skipping capture`
+      );
+      screenshotResults.push({ timestamp, path: screenshotPath });
+    } else {
+      let retries = 3;
+      while (retries > 0) {
+        try {
           console.log(`Capturing screenshot for ${waybackUrl}`);
 
           // Set a random user agent
@@ -173,48 +177,42 @@ async function captureScreenshots(url, timestamps) {
           });
           await page.screenshot({ path: screenshotPath, fullPage: true });
           console.log(`Screenshot saved: ${screenshotPath}`);
+          screenshotResults.push({ timestamp, path: screenshotPath });
           requestCount++;
           break;
-        }
-      } catch (error) {
-        console.error(`Error capturing screenshot for ${timestamp}:`, error);
-        retries--;
-        if (retries > 0) {
-          const delay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
-          console.log(`Retrying in ${delay / 1000} seconds...`);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        } else {
-          sendSSE({
-            status: "warning",
-            message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
-            current: i + 1,
-            total: timestamps.length,
-          });
+        } catch (error) {
+          console.error(`Error capturing screenshot for ${timestamp}:`, error);
+          retries--;
+          if (retries > 0) {
+            const delay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
+            console.log(`Retrying in ${delay / 1000} seconds...`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          } else {
+            sendSSE({
+              status: "warning",
+              message: `Failed to capture screenshot for ${timestamp}: ${error.message}`,
+              current: i + 1,
+              total: timestamps.length,
+            });
+          }
         }
       }
     }
 
-    if (retries > 0) {
-      screenshotResults.push({ timestamp, path: screenshotPath });
+    const date = new Date(
+      timestamp.slice(0, 4),
+      timestamp.slice(4, 6) - 1,
+      timestamp.slice(6, 8)
+    );
+    sendSSE({
+      status: "processing",
+      current: i + 1,
+      total: timestamps.length,
+      date: date.toLocaleString("default", { month: "long", year: "numeric" }),
+    });
 
-      const date = new Date(
-        timestamp.slice(0, 4),
-        timestamp.slice(4, 6) - 1,
-        timestamp.slice(6, 8)
-      );
-      sendSSE({
-        status: "processing",
-        current: i + 1,
-        total: timestamps.length,
-        date: date.toLocaleString("default", {
-          month: "long",
-          year: "numeric",
-        }),
-      });
-    }
-
-    // Add a delay between requests to respect rate limit
-    await new Promise((resolve) => setTimeout(resolve, 4000)); // 4 seconds delay
+    // Add a small delay between requests to respect rate limit
+    await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
   }
 
   console.log("Closing browser");
