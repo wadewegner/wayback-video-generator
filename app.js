@@ -74,17 +74,9 @@ app.post("/generate-video", async (req, res) => {
 
     const urlHash = crypto.createHash("md5").update(url).digest("hex");
     const imageCache = await loadImageCache();
-    const cachedTimestamps = new Set(imageCache[urlHash] || []);
+    const cachedTimestamps = imageCache[urlHash] || [];
 
-    const alreadyCapturedCount = cachedTimestamps.size;
-    const totalCount = timestamps.length;
-
-    timestamps = timestamps.filter(
-      (timestamp) => !cachedTimestamps.has(timestamp)
-    );
-    console.log(
-      `${timestamps.length} new timestamps to process after filtering cached ones`
-    );
+    console.log(`${cachedTimestamps.length} timestamps already in cache`);
 
     if (isQuickTest) {
       timestamps = timestamps.slice(0, 10);
@@ -93,18 +85,18 @@ app.post("/generate-video", async (req, res) => {
       );
     }
 
-    console.log("2. Starting to capture screenshots...");
+    console.log("2. Processing screenshots...");
     sendSSE({
       status: "processing",
-      message: "Starting to capture screenshots...",
-      current: alreadyCapturedCount,
-      total: totalCount,
+      message: "Processing screenshots...",
+      current: 0,
+      total: timestamps.length,
     });
     const screenshotResults = await captureScreenshots(
       url,
       timestamps,
-      alreadyCapturedCount,
-      totalCount
+      0,
+      timestamps.length
     );
 
     console.log("3. Generating video from screenshots...");
@@ -177,13 +169,7 @@ async function fetchWaybackTimestamps(url) {
 }
 
 async function captureScreenshots(url, timestamps, startCount, totalCount) {
-  console.log("Launching browser for screenshot capture");
-  const browser = await puppeteer.launch({
-    executablePath: "/usr/bin/google-chrome",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    defaultViewport: { width: 1920, height: 1080 },
-  });
-
+  console.log("Preparing screenshots");
   const urlHash = crypto.createHash("md5").update(url).digest("hex");
   const siteDir = path.join(__dirname, "screenshots", urlHash);
   if (!fsSync.existsSync(siteDir)) {
@@ -192,76 +178,76 @@ async function captureScreenshots(url, timestamps, startCount, totalCount) {
   }
 
   const screenshotResults = [];
+  const imageCache = await loadImageCache();
+  const cachedTimestamps = imageCache[urlHash] || [];
 
   for (let i = 0; i < timestamps.length; i++) {
     const timestamp = timestamps[i];
-    const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
     const screenshotFilename = `screenshot_${timestamp}.png`;
     const screenshotPath = path.join(siteDir, screenshotFilename);
 
-    let retries = 3;
-    while (retries > 0) {
+    if (
+      cachedTimestamps.includes(timestamp) &&
+      fsSync.existsSync(screenshotPath)
+    ) {
+      console.log(`Using cached screenshot for ${timestamp}`);
+      screenshotResults.push({ timestamp, path: screenshotPath });
+    } else {
+      // Only launch the browser if we need to capture new screenshots
+      if (!global.browser) {
+        console.log("Launching browser for screenshot capture");
+        global.browser = await puppeteer.launch({
+          executablePath: "/usr/bin/google-chrome",
+          args: ["--no-sandbox", "--disable-setuid-sandbox"],
+          defaultViewport: { width: 1920, height: 1080 },
+        });
+      }
+
+      const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
+
       try {
         console.log(`Capturing screenshot for ${waybackUrl}`);
-        const page = await browser.newPage();
+        const page = await global.browser.newPage();
         const userAgent = new UserAgent();
         await page.setUserAgent(userAgent.toString());
 
-        // Set a shorter timeout for navigation
         await page.goto(waybackUrl, {
           waitUntil: ["load", "domcontentloaded", "networkidle0"],
           timeout: 30000, // 30 seconds timeout
         });
 
-        // Wait for an additional 5 seconds for any dynamic content to load
         await page.waitForTimeout(5000);
-
         await page.screenshot({ path: screenshotPath, fullPage: true });
         await page.close();
 
         console.log(`Screenshot saved: ${screenshotPath}`);
         screenshotResults.push({ timestamp, path: screenshotPath });
         await updateImageCache(urlHash, timestamp);
-
-        const date = new Date(
-          timestamp.slice(0, 4),
-          timestamp.slice(4, 6) - 1,
-          timestamp.slice(6, 8)
-        );
-        sendSSE({
-          status: "processing",
-          current: startCount + i + 1,
-          total: totalCount,
-          date: date.toLocaleString("default", {
-            month: "long",
-            year: "numeric",
-          }),
-        });
-
-        break; // Success, exit the retry loop
       } catch (error) {
         console.error(`Error capturing screenshot for ${timestamp}:`, error);
-        retries--;
-        if (retries === 0) {
-          sendSSE({
-            status: "warning",
-            message: `Failed to capture screenshot for ${timestamp} after 3 attempts: ${error.message}`,
-            current: startCount + i + 1,
-            total: totalCount,
-          });
-        } else {
-          console.log(`Retrying... (${retries} attempts left)`);
-          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
-        }
       }
     }
 
+    sendSSE({
+      status: "processing",
+      current: startCount + i + 1,
+      total: totalCount,
+      date: new Date(
+        timestamp.slice(0, 4),
+        timestamp.slice(4, 6) - 1,
+        timestamp.slice(6, 8)
+      ).toLocaleString("default", { month: "long", year: "numeric" }),
+    });
+
     // Add a small delay between requests to respect rate limit
-    await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 seconds delay
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  console.log("Closing browser");
-  await browser.close();
+  if (global.browser) {
+    console.log("Closing browser");
+    await global.browser.close();
+    global.browser = null;
+  }
 
   return screenshotResults;
 }
