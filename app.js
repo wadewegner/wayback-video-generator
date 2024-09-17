@@ -274,58 +274,69 @@ async function generateVideo(url, screenshotResults) {
   // Sort screenshots by timestamp
   screenshotResults.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-  return new Promise((resolve, reject) => {
-    const ffmpegCommand = ffmpeg();
+  // Create a temporary file with the list of images
+  const listFilePath = path.join(__dirname, `${urlHash}_images.txt`);
+  const fileContent = screenshotResults
+    .map((result) => `file '${result.path}'`)
+    .join("\n");
 
-    // Check if running on DigitalOcean (you might need to adjust this check)
-    const isDigitalOcean = process.env.DIGITAL_OCEAN === "true";
+  try {
+    // Write the file content and log it
+    await fs.writeFile(listFilePath, fileContent);
+    console.log("Content of images.txt:");
+    console.log(fileContent);
 
-    if (isDigitalOcean) {
-      ffmpegCommand.setFfmpegPath("/usr/bin/ffmpeg");
-    }
+    // Check if the file exists and is readable
+    await fs.access(listFilePath, fs.constants.R_OK);
+    console.log(`File ${listFilePath} exists and is readable`);
 
-    // Create a temporary file with the list of images
-    const listFilePath = path.join(__dirname, `${urlHash}_images.txt`);
-    const fileContent = screenshotResults
-      .map((result) => `file '${result.path}'`)
-      .join("\n");
-    fsSync.writeFileSync(listFilePath, fileContent);
+    return new Promise((resolve, reject) => {
+      const ffmpegCommand = ffmpeg();
 
-    ffmpegCommand
-      .input(listFilePath)
-      .inputOptions(["-f concat", "-safe 0"])
-      .inputFPS(1)
-      .output(outputPath)
-      .videoCodec("libx264")
-      .outputOptions("-pix_fmt yuv420p") // Ensure compatibility
-      .on("start", (commandLine) => {
-        console.log("FFmpeg process started:", commandLine);
-      })
-      .on("progress", (progress) => {
-        console.log(`FFmpeg progress: ${progress.percent}% done`);
-        sendSSE({
-          status: "generating",
-          message: `Generating video: ${Math.round(
-            progress.percent
-          )}% complete`,
-        });
-      })
-      .on("end", () => {
-        console.log("FFmpeg process completed");
-        // Clean up the temporary file
-        fsSync.unlinkSync(listFilePath);
-        resolve(`/${urlHash}_output.mp4`);
-      })
-      .on("error", (err) => {
-        console.error("FFmpeg error:", err);
-        // Clean up the temporary file in case of error
-        if (fsSync.existsSync(listFilePath)) {
-          fsSync.unlinkSync(listFilePath);
-        }
-        reject(err);
-      })
-      .run();
-  });
+      // Check if running on DigitalOcean
+      const isDigitalOcean = process.env.DIGITAL_OCEAN === "true";
+
+      if (isDigitalOcean) {
+        ffmpegCommand.setFfmpegPath("/usr/bin/ffmpeg");
+      }
+
+      ffmpegCommand
+        .input(listFilePath)
+        .inputOptions(["-f concat", "-safe 0"])
+        .inputFPS(1)
+        .output(outputPath)
+        .videoCodec("libx264")
+        .outputOptions("-pix_fmt yuv420p") // Ensure compatibility
+        .on("start", (commandLine) => {
+          console.log("FFmpeg process started:", commandLine);
+        })
+        .on("progress", (progress) => {
+          console.log(`FFmpeg progress: ${progress.percent}% done`);
+          sendSSE({
+            status: "generating",
+            message: `Generating video: ${Math.round(
+              progress.percent
+            )}% complete`,
+          });
+        })
+        .on("end", () => {
+          console.log("FFmpeg process completed");
+          // Clean up the temporary file
+          fs.unlink(listFilePath);
+          resolve(`/${urlHash}_output.mp4`);
+        })
+        .on("error", (err) => {
+          console.error("FFmpeg error:", err);
+          // Clean up the temporary file in case of error
+          fs.unlink(listFilePath);
+          reject(err);
+        })
+        .run();
+    });
+  } catch (error) {
+    console.error("Error in generateVideo:", error);
+    throw error;
+  }
 }
 
 module.exports = app;
