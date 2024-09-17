@@ -274,6 +274,12 @@ async function generateVideo(url, screenshotResults) {
   // Sort screenshots by timestamp
   screenshotResults.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
+  console.log(`Number of screenshots: ${screenshotResults.length}`);
+
+  if (screenshotResults.length === 0) {
+    throw new Error("No screenshots captured. Cannot generate video.");
+  }
+
   // Create a temporary file with the list of images
   const listFilePath = path.join(__dirname, `${urlHash}_images.txt`);
   const fileContent = screenshotResults
@@ -289,6 +295,19 @@ async function generateVideo(url, screenshotResults) {
     // Check if the file exists and is readable
     await fs.access(listFilePath, fs.constants.R_OK);
     console.log(`File ${listFilePath} exists and is readable`);
+
+    // Check file size
+    const stats = await fs.stat(listFilePath);
+    console.log(`File size: ${stats.size} bytes`);
+
+    if (stats.size === 0) {
+      throw new Error("images.txt file is empty");
+    }
+
+    // Read and log the file contents
+    const readContent = await fs.readFile(listFilePath, "utf8");
+    console.log("File contents:");
+    console.log(readContent);
 
     return new Promise((resolve, reject) => {
       const ffmpegCommand = ffmpeg();
