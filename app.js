@@ -282,19 +282,6 @@ async function generateVideo(url, screenshotResults) {
     await fs.access(listFilePath, fs.constants.R_OK);
     console.log(`File ${listFilePath} exists and is readable`);
 
-    // Check file size
-    const stats = await fs.stat(listFilePath);
-    console.log(`File size: ${stats.size} bytes`);
-
-    if (stats.size === 0) {
-      throw new Error("images.txt file is empty");
-    }
-
-    // Read and log the file contents
-    const readContent = await fs.readFile(listFilePath, "utf8");
-    console.log("File contents:");
-    console.log(readContent);
-
     return new Promise((resolve, reject) => {
       const ffmpegCommand = ffmpeg();
 
@@ -305,10 +292,17 @@ async function generateVideo(url, screenshotResults) {
         ffmpegCommand.setFfmpegPath("/usr/bin/ffmpeg");
       }
 
+      let framesProcessed = 0;
+      const totalFrames = screenshotResults.length;
+
       ffmpegCommand
         .input(listFilePath)
         .inputOptions(["-f concat", "-safe 0"])
         .inputFPS(1)
+        .videoFilters([
+          "scale=1920:1080:force_original_aspect_ratio=decrease",
+          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+        ])
         .output(outputPath)
         .videoCodec("libx264")
         .outputOptions("-pix_fmt yuv420p") // Ensure compatibility
@@ -316,12 +310,15 @@ async function generateVideo(url, screenshotResults) {
           console.log("FFmpeg process started:", commandLine);
         })
         .on("progress", (progress) => {
-          console.log(`FFmpeg progress: ${progress.percent}% done`);
+          framesProcessed++;
+          const percent = Math.min(
+            100,
+            Math.round((framesProcessed / totalFrames) * 100)
+          );
+          console.log(`FFmpeg progress: ${percent}% done`);
           sendSSE({
             status: "generating",
-            message: `Generating video: ${Math.round(
-              progress.percent
-            )}% complete`,
+            message: `Generating video: ${percent}% complete`,
           });
         })
         .on("end", () => {
