@@ -300,7 +300,11 @@ async function generateVideo(url, screenshotResults) {
         .inputOptions(["-f concat", "-safe 0"])
         .inputFPS(1)
         .videoFilters([
+          // Crop to 16:9 aspect ratio, focusing on the top of the image
+          "crop=iw:iw*9/16:0:0",
+          // Scale to 1920x1080 while maintaining aspect ratio
           "scale=1920:1080:force_original_aspect_ratio=decrease",
+          // Pad to 1920x1080 if necessary
           "pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
         ])
         .output(outputPath)
