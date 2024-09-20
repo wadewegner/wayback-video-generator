@@ -245,7 +245,7 @@ async function captureScreenshots(url, timestamps, startCount, totalCount) {
 
         await page.goto(waybackUrl, {
           waitUntil: ["load", "domcontentloaded", "networkidle0"],
-          timeout: 30000, // 30 seconds timeout
+          timeout: 60000, // 60 seconds timeout
         });
 
         await new Promise(resolve => setTimeout(resolve, 5000));
@@ -258,6 +258,18 @@ async function captureScreenshots(url, timestamps, startCount, totalCount) {
         await updateImageCache(urlHash, timestamp);
       } catch (error) {
         console.error(`Error capturing screenshot for ${timestamp}:`, error);
+        if (error instanceof TimeoutError) {
+          console.log(`Timeout occurred for ${waybackUrl}. Skipping this screenshot.`);
+          sendSSE({
+            status: 'warning',
+            message: `Timeout occurred for ${new Date(timestamp.slice(0, 4), timestamp.slice(4, 6) - 1, timestamp.slice(6, 8)).toLocaleString("default", { month: "long", year: "numeric" })}. Skipping this screenshot.`
+          });
+        } else {
+          sendSSE({
+            status: 'warning',
+            message: `Error capturing screenshot for ${new Date(timestamp.slice(0, 4), timestamp.slice(4, 6) - 1, timestamp.slice(6, 8)).toLocaleString("default", { month: "long", year: "numeric" })}. Skipping this screenshot.`
+          });
+        }
       }
     }
 
