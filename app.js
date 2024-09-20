@@ -152,9 +152,17 @@ app.listen(port, () => {
 async function fetchWaybackTimestamps(url) {
   console.log(`Fetching Wayback Machine timestamps for ${url}`);
   try {
-    const apiUrl = `http://web.archive.org/cdx/search/cdx?url=${url}&output=json&fl=timestamp&filter=statuscode:200&collapse=timestamp:6`;
+    const encodedUrl = encodeURIComponent(url);
+    const apiUrl = `https://web.archive.org/cdx/search/cdx?url=${encodedUrl}&output=json&fl=timestamp&filter=statuscode:200&collapse=timestamp:8`;
     console.log(`API URL: ${apiUrl}`);
-    const response = await axios.get(apiUrl);
+    
+    const response = await axios.get(apiUrl, {
+      timeout: 30000,
+      headers: {
+        'User-Agent': 'YourAppName/1.0 (your@email.com)'
+      }
+    });
+    
     console.log("Received response from Wayback Machine API");
     if (!response.data || response.data.length <= 1) {
       console.log("No archived versions found");
@@ -163,7 +171,7 @@ async function fetchWaybackTimestamps(url) {
     console.log(`Found ${response.data.length - 1} timestamps`);
     return response.data.slice(1).map((item) => item[0]);
   } catch (error) {
-    console.error("Error in fetchWaybackTimestamps:", error);
+    console.error("Error in fetchWaybackTimestamps:", error.message);
     throw error;
   }
 }
