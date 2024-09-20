@@ -1,6 +1,6 @@
 const express = require("express");
 const axios = require("axios");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-core");
 const ffmpeg = require("fluent-ffmpeg");
 const path = require("path");
 const fs = require("fs").promises;
@@ -188,6 +188,24 @@ async function captureScreenshots(url, timestamps, startCount, totalCount) {
   const screenshotResults = [];
   const imageCache = await loadImageCache();
   const cachedTimestamps = imageCache[urlHash] || [];
+
+  // Only launch the browser if we need to capture new screenshots
+  if (!global.browser) {
+    console.log("Launching browser for screenshot capture");
+    const launchOptions = {
+      executablePath: '/usr/bin/google-chrome-stable',
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      defaultViewport: { width: 1920, height: 1080 },
+    };
+
+    try {
+      global.browser = await puppeteer.launch(launchOptions);
+      console.log("Browser launched successfully");
+    } catch (error) {
+      console.error('Failed to launch browser:', error);
+      throw error;
+    }
+  }
 
   for (let i = 0; i < timestamps.length; i++) {
     const timestamp = timestamps[i];
