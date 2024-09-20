@@ -79,7 +79,7 @@ app.post("/generate-video", async (req, res) => {
     console.log(`${cachedTimestamps.length} timestamps already in cache`);
 
     if (isQuickTest) {
-      timestamps = timestamps.slice(0, 10);
+      timestamps = timestamps.slice(-10);
       console.log(
         `Quick test mode: limited to ${timestamps.length} timestamps`
       );
