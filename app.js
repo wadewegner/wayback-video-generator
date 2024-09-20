@@ -282,6 +282,8 @@ async function generateVideo(url, screenshotResults) {
     await fs.access(listFilePath, fs.constants.R_OK);
     console.log(`File ${listFilePath} exists and is readable`);
 
+    //for paddy
+
     return new Promise((resolve, reject) => {
       const ffmpegCommand = ffmpeg();
 
