@@ -159,7 +159,7 @@ async function fetchWaybackTimestamps(url) {
     const response = await axios.get(apiUrl, {
       timeout: 60000, // Increase timeout to 60 seconds
       headers: {
-        'User-Agent': 'YourAppName/1.0 (your@email.com)'
+        'User-Agent': 'Wayback Machine Movie Maker/1.0'
       }
     });
     
