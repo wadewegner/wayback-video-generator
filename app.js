@@ -153,11 +153,11 @@ async function fetchWaybackTimestamps(url) {
   console.log(`Fetching Wayback Machine timestamps for ${url}`);
   try {
     const encodedUrl = encodeURIComponent(url);
-    const apiUrl = `https://web.archive.org/cdx/search/cdx?url=${encodedUrl}&output=json&fl=timestamp&filter=statuscode:200&collapse=timestamp:8`;
+    const apiUrl = `http://web.archive.org/cdx/search/cdx?url=${encodedUrl}&output=json&fl=timestamp&filter=statuscode:200&collapse=timestamp:8`;
     console.log(`API URL: ${apiUrl}`);
     
     const response = await axios.get(apiUrl, {
-      timeout: 30000,
+      timeout: 60000, // Increase timeout to 60 seconds
       headers: {
         'User-Agent': 'YourAppName/1.0 (your@email.com)'
       }
@@ -204,11 +204,17 @@ async function captureScreenshots(url, timestamps, startCount, totalCount) {
       // Only launch the browser if we need to capture new screenshots
       if (!global.browser) {
         console.log("Launching browser for screenshot capture");
-        global.browser = await puppeteer.launch({
-          executablePath: "/usr/bin/google-chrome",
+        const launchOptions = {
           args: ["--no-sandbox", "--disable-setuid-sandbox"],
           defaultViewport: { width: 1920, height: 1080 },
-        });
+        };
+
+        // Check if running on DigitalOcean
+        if (process.env.DIGITAL_OCEAN === "true") {
+          launchOptions.executablePath = "/usr/bin/google-chrome";
+        }
+
+        global.browser = await puppeteer.launch(launchOptions);
       }
 
       const waybackUrl = `http://web.archive.org/web/${timestamp}/${url}`;
@@ -224,7 +230,8 @@ async function captureScreenshots(url, timestamps, startCount, totalCount) {
           timeout: 30000, // 30 seconds timeout
         });
 
-        await page.waitForTimeout(5000);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
         await page.screenshot({ path: screenshotPath, fullPage: true });
         await page.close();
 
